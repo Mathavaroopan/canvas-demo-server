@@ -45,10 +45,11 @@ const storage = multer.memoryStorage();
 const upload = multer({ storage: storage });
 
 const app = express();
-app.use(cors({ origin: "*" })); // Allow all origins
+app.use(cors({ origin: "*" }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-app.use(express.static(path.join(__dirname, "hls_output"))); // Serve M3U8 files
+// Serve static files from the hls_output folder.
+app.use(express.static(path.join(__dirname, "hls_output")));
 
 // Create a temporary directory for video conversion if it doesn't exist.
 const TMP_DIR = path.join(__dirname, 'tmp');
@@ -96,14 +97,11 @@ function createM3U8WithExactSegments(inputPath, blackoutSegments) {
     // 2. Build list of segments.
     const allSegments = [];
     let currentTime = 0;
-    // Sort custom segments by start time.
     customSegments.sort((a, b) => a.start - b.start);
     for (const customSeg of customSegments) {
-      // If there's a gap before this segment, add a normal segment.
       if (customSeg.start > currentTime) {
         allSegments.push({ start: currentTime, end: customSeg.start, isBlackout: false });
       }
-      // Add the blackout segment.
       allSegments.push({ start: customSeg.start, end: customSeg.end, isBlackout: true });
       currentTime = customSeg.end;
     }
@@ -187,7 +185,6 @@ function createM3U8WithExactSegments(inputPath, blackoutSegments) {
   }
 }
 
-
 /**
  * Uploads all files in the output directory to S3 under a folder named submissionId.
  * Returns a mapping from local file names to S3 URLs.
@@ -250,21 +247,31 @@ async function uploadToS3(fileBuffer, key, contentType) {
 // Endpoint to handle video upload, conversion using client-provided blackout segments, and lock creation.
 app.post('/create-lock', upload.single('video'), async (req, res) => {
   try {
-    const { platformId, userId, contentId, contentUrl, blackoutLocks } = req.body;
+    const { platformId, userId, contentId, contentUrl, blackoutLocks, folderName } = req.body;
+    console.log(req.body);
+    console.log("\n\n\n\n\nfoldername:" + folderName);
     const parsedBlackoutLocks = JSON.parse(blackoutLocks);
 
     if (!req.file) throw new Error("No video file provided");
     const inputVideoPath = path.join(TMP_DIR, `${Date.now()}-${req.file.originalname}`);
-    console.log(inputVideoPath);
-    
+    console.log("Input video path:", inputVideoPath);
     fs.writeFileSync(inputVideoPath, req.file.buffer);
 
     const { normalPlaylistPath, blackoutPlaylistPath } = createM3U8WithExactSegments(inputVideoPath, parsedBlackoutLocks);
 
-    // Create a unique folder name for this submission.
-    const submissionId = uuidv4();
-    const folderUrl = `https://${BUCKET_NAME}.s3.amazonaws.com/${submissionId}/`;
+    // Use provided folderName if available; otherwise, generate a new one.
+    let submissionId;
+    if (folderName && typeof folderName === 'string' && folderName.trim() !== "") {
+      // Normalize folder name - remove leading/trailing slashes
+      submissionId = folderName.trim().replace(/^\/+|\/+$/g, '');
+      console.log(`Using provided folder name: ${submissionId}`);
+    } else {
+      submissionId = uuidv4();
+      console.log(`No valid folder name provided, generated UUID: ${submissionId}`);
+    }
 
+    const folderUrl = `https://${BUCKET_NAME}.s3.amazonaws.com/${submissionId}/`;
+    console.log("Folder url final: " + folderUrl);
     // Upload all files from the HLS output directory to S3 under submissionId.
     const fileUrlMapping = await uploadHlsFilesToS3(submissionId);
 
@@ -296,14 +303,15 @@ app.post('/create-lock', upload.single('video'), async (req, res) => {
 });
 
 /**
- * New API endpoint: Given a folder prefix (folderUrl) from S3, download all files from that folder
+ * GET /download-folder
+ * Given a folder prefix (folderUrl) from S3 (e.g., "submissionId/"), download all files from that folder
  * and store them in the local outputDir.
  * Example request: GET /download-folder?folderPrefix=362d2d1e-9e77-437f-b400-cb5043d39ef2/
  */
 app.get('/download-folder', async (req, res) => {
   try {
     const folderPrefix = req.query.folderPrefix;
-    console.log(folderPrefix);
+    console.log("Download folder with prefix:", folderPrefix);
     if (!folderPrefix) {
       return res.status(400).json({ error: "folderPrefix query parameter is required." });
     }
@@ -321,7 +329,6 @@ app.get('/download-folder', async (req, res) => {
     const downloadedFiles = [];
     // Construct the URL prefix to remove from m3u8 files.
     const s3UrlPrefix = `https://${BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/${folderPrefix}`;
-
     for (const object of data.Contents) {
       const key = object.Key;
       if (key.endsWith('/')) continue;
@@ -355,6 +362,26 @@ app.get('/download-folder', async (req, res) => {
   }
 });
 
+/**
+ * GET /get-folder-names
+ * List folder names (common prefixes) in the S3 bucket.
+ * Example request: GET /get-folder-names
+ */
+app.get('/get-folder-names', async (req, res) => {
+  try {
+    const listParams = {
+      Bucket: BUCKET_NAME,
+      Delimiter: '/'
+    };
+    const listCommand = new ListObjectsV2Command(listParams);
+    const data = await s3Client.send(listCommand);
+    const folders = data.CommonPrefixes ? data.CommonPrefixes.map(prefixObj => prefixObj.Prefix) : [];
+    res.status(200).json({ folders });
+  } catch (error) {
+    console.error("Error in /get-folder-names:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
 
 // Start the Express server on port 3000.
 const PORT = 3000;
