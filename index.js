@@ -46,8 +46,8 @@ const upload = multer({ storage: storage });
 
 const app = express();
 app.use(cors({ 
-  origin: ["https://deploy-mern-1whq.vercel.app"],
-  methods: ["POST", "GET"],
+  origin: `${process.env.CLIENT_URL}`,
+  methods: ["POST", "GET", "PUT", "DELETE", "PATCH", "HEAD"],
   credentials: true
 }));
 
