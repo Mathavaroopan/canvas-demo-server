@@ -3,17 +3,13 @@ const cors = require('cors');
 const path = require('path');
 const multer = require('multer');
 const mongoose = require('mongoose');
-const { execSync } = require('child_process');
 const fs = require('fs');
 const { v4: uuidv4 } = require('uuid');
 require('dotenv').config();
 
 // AWS S3 SDK modules
-const { S3Client, ListObjectsV2Command, GetObjectCommand } = require("@aws-sdk/client-s3");
+const { S3Client, ListObjectsV2Command } = require("@aws-sdk/client-s3");
 const { Upload } = require("@aws-sdk/lib-storage");
-const { pipeline } = require("stream");
-const { promisify } = require("util");
-const streamPipeline = promisify(pipeline);
 
 // Initialize Express App
 const app = express();
@@ -21,11 +17,8 @@ app.use(cors({ origin: process.env.CLIENT_URL, credentials: true }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Serve static files from 'hls_output'
-app.use(express.static(path.join(__dirname, "hls_output")));
-
 // Connect to MongoDB
-mongoose.connect(process.env.MONGO_URI)
+mongoose.connect(process.env.MONGO_URI, { useNewUrlParser: true, useUnifiedTopology: true })
   .then(() => console.log('✅ Connected to MongoDB'))
   .catch(err => console.error('❌ MongoDB Connection Error:', err));
 
@@ -45,24 +38,20 @@ const s3Client = new S3Client({
 });
 const BUCKET_NAME = process.env.AWS_S3_BUCKET_NAME;
 
-// ✅ Use Vercel’s temporary directory instead of `/var/task/tmp`
+// Use Vercel’s temporary directory for file operations
 const TMP_DIR = "/tmp";
-const OUTPUT_DIR = path.join(__dirname, 'hls_output');
-
-// Ensure output directories exist
-if (!fs.existsSync(OUTPUT_DIR)) fs.mkdirSync(OUTPUT_DIR, { recursive: true });
 
 // Configure Multer to use memory storage
 const upload = multer({ storage: multer.memoryStorage() });
 
 /**
- * ✅ Convert MP4 video to HLS format with blackout segments
+ * Convert MP4 video to HLS format with blackout segments
  */
 function createM3U8WithExactSegments(inputPath, blackoutSegments) {
   try {
     const allSegments = [];
     let currentTime = 0;
-    
+
     blackoutSegments.sort((a, b) => a.startTime - b.startTime);
     blackoutSegments.forEach(seg => {
       if (seg.startTime > currentTime) {
@@ -73,10 +62,10 @@ function createM3U8WithExactSegments(inputPath, blackoutSegments) {
     });
 
     // Generate .m3u8 playlists
-    const normalPlaylistPath = path.join(OUTPUT_DIR, 'output.m3u8');
+    const normalPlaylistPath = path.join(TMP_DIR, 'output.m3u8');
     fs.writeFileSync(normalPlaylistPath, "#EXTM3U\n#EXT-X-PLAYLIST-TYPE:VOD\n#EXT-X-ENDLIST");
 
-    const blackoutPlaylistPath = path.join(OUTPUT_DIR, 'blackout.m3u8');
+    const blackoutPlaylistPath = path.join(TMP_DIR, 'blackout.m3u8');
     fs.writeFileSync(blackoutPlaylistPath, "#EXTM3U\n#EXT-X-PLAYLIST-TYPE:VOD\n#EXT-X-ENDLIST");
 
     return { normalPlaylistPath, blackoutPlaylistPath };
@@ -87,14 +76,14 @@ function createM3U8WithExactSegments(inputPath, blackoutSegments) {
 }
 
 /**
- * ✅ Upload HLS files to S3
+ * Upload HLS files to S3
  */
 async function uploadHlsFilesToS3(submissionId) {
-  const files = fs.readdirSync(OUTPUT_DIR);
+  const files = fs.readdirSync(TMP_DIR);
   const fileUrlMapping = {};
 
   for (const file of files) {
-    const filePath = path.join(OUTPUT_DIR, file);
+    const filePath = path.join(TMP_DIR, file);
     const fileBuffer = fs.readFileSync(filePath);
     const key = `${submissionId}/${file}`;
 
@@ -114,7 +103,7 @@ async function uploadHlsFilesToS3(submissionId) {
 }
 
 /**
- * ✅ API: Upload Video, Convert to HLS, and Create Lock
+ * API: Upload Video, Convert to HLS, and Create Lock
  */
 app.post('/create-lock', upload.single('video'), async (req, res) => {
   try {
@@ -152,7 +141,7 @@ app.post('/create-lock', upload.single('video'), async (req, res) => {
 });
 
 /**
- * ✅ API: Get Folder Names from S3
+ * API: Get Folder Names from S3
  */
 app.get('/get-folder-names', async (req, res) => {
   try {
@@ -164,24 +153,6 @@ app.get('/get-folder-names', async (req, res) => {
   }
 });
 
-/**
- * ✅ API: Download Folder from S3
- */
-app.get('/download-folder', async (req, res) => {
-  try {
-    const folderPrefix = req.query.folderPrefix;
-    if (!folderPrefix) return res.status(400).json({ error: "folderPrefix is required" });
-
-    const data = await s3Client.send(new ListObjectsV2Command({ Bucket: BUCKET_NAME, Prefix: folderPrefix }));
-    if (!data.Contents || data.Contents.length === 0) return res.status(404).json({ error: "No files found" });
-
-    res.status(200).json({ message: "Files downloaded successfully" });
-  } catch (error) {
-    console.error("❌ Error in /download-folder:", error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
 // Start Server
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`✅ Server running on port ${PORT}`));
