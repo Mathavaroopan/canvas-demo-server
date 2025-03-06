@@ -5,6 +5,7 @@ const multer = require('multer');
 const mongoose = require('mongoose');
 const { execSync } = require('child_process');
 const fs = require('fs');
+const { createProxyMiddleware } = require("http-proxy-middleware");
 const { v4: uuidv4 } = require('uuid');
 require('dotenv').config(); // Loads variables from .env
 
@@ -49,6 +50,15 @@ app.use(cors({
   origin: ["http://localhost:5173", "https://canvas-demo-client.vercel.app/"], // Replace with your frontend URL
   credentials: true, // Allow cookies and credentials
 }));
+
+app.use(
+  "/api",
+  createProxyMiddleware({
+    target: "http://54.90.83.226:4000", // Your actual HTTP server
+    changeOrigin: true,
+    secure: false, // Allow insecure HTTP
+  })
+);
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
