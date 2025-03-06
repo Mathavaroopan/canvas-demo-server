@@ -394,7 +394,7 @@ app.get('/get-folder-names', async (req, res) => {
 });
 
 // Start the Express server on port 3000.
-const PORT = 3000;
+const PORT = 4000;
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
