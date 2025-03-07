@@ -261,9 +261,8 @@ async function uploadToS3(fileBuffer, key, contentType) {
 // Endpoint to handle video upload, conversion using client-provided blackout segments, and lock creation.
 app.post('/create-lock', upload.single('video'), async (req, res) => {
   try {
-    const { platformId, userId, contentId, contentUrl, blackoutLocks, folderName } = req.body;
+    const { platformId, userId, contentId, contentUrl, blackoutLocks } = req.body;
     console.log(req.body);
-    console.log("\n\n\n\n\nfoldername:" + folderName);
     const parsedBlackoutLocks = JSON.parse(blackoutLocks);
 
     if (!req.file) throw new Error("No video file provided");
@@ -273,19 +272,10 @@ app.post('/create-lock', upload.single('video'), async (req, res) => {
 
     const { normalPlaylistPath, blackoutPlaylistPath } = createM3U8WithExactSegments(inputVideoPath, parsedBlackoutLocks);
 
-    // Use provided folderName if available; otherwise, generate a new one.
-    let submissionId;
-    if (folderName && typeof folderName === 'string' && folderName.trim() !== "") {
-      // Normalize folder name - remove leading/trailing slashes
-      submissionId = folderName.trim().replace(/^\/+|\/+$/g, '');
-      console.log(`Using provided folder name: ${submissionId}`);
-    } else {
-      submissionId = uuidv4();
-      console.log(`No valid folder name provided, generated UUID: ${submissionId}`);
-    }
+    // Use contentId for the folder name
+    const submissionId = contentId;
+    console.log(`Using contentId as folder name: ${submissionId}`);
 
-    const folderUrl = `https://${BUCKET_NAME}.s3.amazonaws.com/${submissionId}/`;
-    console.log("Folder url final: " + folderUrl);
     // Upload all files from the HLS output directory to S3 under submissionId.
     const fileUrlMapping = await uploadHlsFilesToS3(submissionId);
 
@@ -299,13 +289,38 @@ app.post('/create-lock', upload.single('video'), async (req, res) => {
 
     fs.unlinkSync(inputVideoPath);
 
+    // Format the lock object according to the schema requirements
+    const lockId = uuidv4(); // Generate a unique lock ID
+    
+    // Create a properly formatted LockJsonObject
+    const lockJsonObject = {
+      lockId: lockId,
+      originalcontentUrl: contentUrl,
+      contentId: contentId,
+      lockedcontenturl: updatedBlackoutUrl,
+      locks: {
+        "replacement-video-locks": [],
+        "image-locks": [],
+        "blackout-locks": parsedBlackoutLocks.map(lock => ({
+          bl_id: uuidv4(),
+          startTime: Number(lock.startTime),
+          endTime: Number(lock.endTime)
+        }))
+      },
+      awsMetadata: {
+        AWS_ACCESS_KEY_ID: process.env.AWS_ACCESS_KEY_ID || "your-access-key",
+        AWS_SECRET_ACCESS_KEY: process.env.AWS_SECRET_ACCESS_KEY || "your-secret-key",
+        AWS_REGION: process.env.AWS_REGION || "your-region",
+        AWS_S3_BUCKET_NAME: BUCKET_NAME || "your-bucket-name"
+      }
+    };
+
     const newLock = new Lock({
       PlatformID: platformId,
       UserID: userId,
-      ContentUrl: updatedNormalUrl,
+      OriginalContentUrl: contentUrl,
       LockedContentUrl: updatedBlackoutUrl,
-      FolderUrl: folderUrl,
-      LockJsonObject: parsedBlackoutLocks,
+      LockJsonObject: lockJsonObject
     });
 
     const savedLock = await newLock.save();
@@ -315,7 +330,6 @@ app.post('/create-lock', upload.single('video'), async (req, res) => {
     res.status(500).json({ message: 'Server error', error: err.message });
   }
 });
-
 /**
  * GET /download-folder
  * Given a folder prefix (folderUrl) from S3 (e.g., "submissionId/"), download all files from that folder
@@ -404,7 +418,7 @@ app.get('/get-folder-names', async (req, res) => {
 });
 
 // Start the Express server on port 3000.
-const PORT = 4000;
+const PORT = 3000;
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });

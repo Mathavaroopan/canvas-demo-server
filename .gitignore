@@ -2,3 +2,4 @@ node_modules/
 hls_output/
 tmp/
 .env
+tables-copy-paste.txt
