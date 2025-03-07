@@ -29,12 +29,6 @@ const LockSchema = new Schema({
           startTime: { type: Number, required: true },
           endTime: { type: Number, required: true }
         }]
-      },
-      awsMetadata: {
-        AWS_ACCESS_KEY_ID: { type: String, required: true },
-        AWS_SECRET_ACCESS_KEY: { type: String, required: true },
-        AWS_REGION: { type: String, required: true },
-        AWS_S3_BUCKET_NAME: { type: String, required: true }
       }
     },
     required: true

@@ -306,12 +306,6 @@ app.post('/create-lock', upload.single('video'), async (req, res) => {
           startTime: Number(lock.startTime),
           endTime: Number(lock.endTime)
         }))
-      },
-      awsMetadata: {
-        AWS_ACCESS_KEY_ID: process.env.AWS_ACCESS_KEY_ID || "your-access-key",
-        AWS_SECRET_ACCESS_KEY: process.env.AWS_SECRET_ACCESS_KEY || "your-secret-key",
-        AWS_REGION: process.env.AWS_REGION || "your-region",
-        AWS_S3_BUCKET_NAME: BUCKET_NAME || "your-bucket-name"
       }
     };
 
