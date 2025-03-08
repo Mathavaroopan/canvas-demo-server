@@ -1,0 +1,9 @@
+{
+    "awsAccessKeyId": "AKIA6HSBCAKY62XI23B7",
+    "awsSecretAccessKey": "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",
+    "awsRegion": "us-east-1",
+    "awsBucketName": "canvasapitest",
+    "awsOriginalKey": "original-videos/1-min.mp4",
+    "awsDestinationFolder": "AES-videos/"
+  }
+  
