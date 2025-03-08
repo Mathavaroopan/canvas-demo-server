@@ -3,3 +3,5 @@ hls_output/
 tmp/
 .env
 tables-copy-paste.txt
+.test-aws-info.json
+.test-show-videos.json
