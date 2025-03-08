@@ -10,7 +10,12 @@ const { v4: uuidv4 } = require('uuid');
 require('dotenv').config();
 
 // AWS S3 SDK modules
-const { S3Client, ListObjectsV2Command, GetObjectCommand } = require("@aws-sdk/client-s3");
+const { 
+  S3Client, 
+  ListObjectsV2Command, 
+  GetObjectCommand, 
+  DeleteObjectsCommand 
+} = require("@aws-sdk/client-s3");
 const { Upload } = require("@aws-sdk/lib-storage");
 const { pipeline } = require("stream");
 const { promisify } = require("util");
@@ -249,51 +254,79 @@ async function uploadToS3(s3Client, fileBuffer, bucketName, key, contentType) {
   }
 }
 
-/**
- * POST /get-folder-names-from-json
- * Expects: { awsData, folderPrefix }
- * Lists subfolders in the given prefix.
- */
-app.post('/get-folder-names-from-json', async (req, res) => {
-  try {
-    const { awsData } = req.body;
-    // If folderPrefix is not provided at top-level, try to get it from awsData.
-    const folderPrefix = req.body.folderPrefix || awsData.folderPrefix;
-    if (!awsData) {
-      return res.status(400).json({ message: "Missing awsData in request body." });
-    }
-    const { awsAccessKeyId, awsSecretAccessKey, awsRegion, awsBucketName } = awsData;
-    if (!awsAccessKeyId || !awsSecretAccessKey || !awsRegion || !awsBucketName) {
-      return res.status(400).json({ message: "Invalid or missing AWS data." });
-    }
-    if (!folderPrefix) {
-      return res.status(400).json({ message: "Missing folderPrefix in request body." });
-    }
-    const prefix = folderPrefix.endsWith('/') ? folderPrefix : folderPrefix + '/';
-    const s3Client = new S3Client({
-      region: awsRegion,
-      credentials: {
-        accessKeyId: awsAccessKeyId,
-        secretAccessKey: awsSecretAccessKey
+app.post('/get-video-names', async (req, res) => {
+    try {
+      const { awsData } = req.body;
+      // If folderPrefix is not provided at top-level, try to get it from awsData.
+      const folderPrefix = req.body.folderPrefix || awsData.folderPrefix;
+      if (!awsData) {
+        return res.status(400).json({ message: "Missing awsData in request body." });
       }
-    });
-    const listParams = {
-      Bucket: awsBucketName,
-      Delimiter: '/',
-      Prefix: prefix
-    };
-    const command = new ListObjectsV2Command(listParams);
-    const data = await s3Client.send(command);
-    let folders = [];
-    if (data.CommonPrefixes) {
-      folders = data.CommonPrefixes.map((p) => p.Prefix);
+      const { awsAccessKeyId, awsSecretAccessKey, awsRegion, awsBucketName } = awsData;
+      if (!awsAccessKeyId || !awsSecretAccessKey || !awsRegion || !awsBucketName) {
+        return res.status(400).json({ message: "Invalid or missing AWS data." });
+      }
+      if (!folderPrefix) {
+        return res.status(400).json({ message: "Missing folderPrefix in request body." });
+      }
+      const prefix = folderPrefix.endsWith('/') ? folderPrefix : folderPrefix + '/';
+      const s3Client = new S3Client({
+        region: awsRegion,
+        credentials: {
+          accessKeyId: awsAccessKeyId,
+          secretAccessKey: awsSecretAccessKey
+        }
+      });
+      const listParams = {
+        Bucket: awsBucketName,
+        Delimiter: '/',
+        Prefix: prefix
+      };
+      const command = new ListObjectsV2Command(listParams);
+      const data = await s3Client.send(command);
+      let folders = [];
+      if (data.CommonPrefixes) {
+        folders = data.CommonPrefixes.map((p) => p.Prefix);
+      }
+      return res.status(200).json({ folders });
+    } catch (error) {
+      console.error("Error in /get-folder-names-from-json:", error);
+      return res.status(500).json({ message: error.message });
     }
-    return res.status(200).json({ folders });
-  } catch (error) {
-    console.error("Error in /get-folder-names-from-json:", error);
-    return res.status(500).json({ message: error.message });
-  }
-});
+  });
+
+/**
+ * GET /get-lockjsonobject/:lockId
+ * Returns the LockJsonObject for the given lock id.
+ */
+app.get('/get-lockjsonobject/:lockId', async (req, res) => {
+    try {
+      const { lockId } = req.params;
+      const lock = await Lock.findOne({ _id: lockId });
+      if (!lock) {
+        return res.status(404).json({ message: "Lock not found." });
+      }
+      return res.status(200).json({ lockJsonObject: lock.LockJsonObject });
+    } catch (error) {
+      console.error("Error in /get-lockjsonobject:", error);
+      return res.status(500).json({ message: error.message });
+    }
+  });
+  
+  app.get('/get-lock-by-contentid/:contentId', async (req, res) => {
+    try {
+      const { contentId } = req.params;
+      // Find the lock document using LockJsonObject.contentId field.
+      const lock = await Lock.findOne({ "LockJsonObject.contentId": contentId });
+      if (!lock) {
+        return res.status(404).json({ message: "Lock not found." });
+      }
+      return res.status(200).json({ lock });
+    } catch (error) {
+      console.error("Error in /get-lock-by-contentid:", error);
+      return res.status(500).json({ message: error.message });
+    }
+  });
 
 /**
  * POST /create-lock-from-json
@@ -302,8 +335,9 @@ app.post('/get-folder-names-from-json', async (req, res) => {
  *   platformId, userId, contentId, blackoutLocks
  * }
  * Creates a subfolder (named after contentId) inside awsDestinationFolder and uploads the processed HLS files.
+ * Now also returns the generated lock id.
  */
-app.post('/create-lock-from-json', async (req, res) => {
+app.post('/create-AES', async (req, res) => {
   try {
     const {
       awsData,
@@ -427,7 +461,7 @@ app.post('/create-lock-from-json', async (req, res) => {
     
     return res.status(201).json({
       message: 'Lock created successfully',
-      lock: savedLock,
+      lock_id: lockJsonObject.lockId,
       normalUrl,
       blackoutUrl
     });
@@ -442,7 +476,7 @@ app.post('/create-lock-from-json', async (req, res) => {
  * Expects: { awsData, folderPrefix }
  * Downloads all files from the given S3 folder into the local hls_output directory.
  */
-app.post('/download-folder-from-json', async (req, res) => {
+app.post('/download-video', async (req, res) => {
   try {
     const { awsData, folderPrefix } = req.body;
     const s3Client = new S3Client({
@@ -508,7 +542,218 @@ app.post('/download-folder-from-json', async (req, res) => {
     return res.status(500).json({ message: error.message });
   }
 });
+
+/**
+ * POST /modify-AES
+ * Expects a JSON body with:
+ * {
+ *   lockId,
+ *   awsData: {
+ *     awsAccessKeyId,
+ *     awsSecretAccessKey,
+ *     awsRegion,
+ *     awsBucketName,
+ *     awsDestinationFolder
+ *   },
+ *   newBlackoutLocks: [ { startTime, endTime }, ... ]
+ * }
+ * 
+ * This endpoint fetches the existing lock record, downloads the original video from S3 (inferring the original key from the stored URL),
+ * re-processes it with the new blackout lock timings (using createM3U8WithExactSegments),
+ * deletes the old folder content in S3,
+ * uploads the new HLS files, and then updates the lock record with the new blackout locks and locked content URL.
+ */
+app.post('/modify-AES', async (req, res) => {
+    try {
+      // Expect awsData, lockId, newBlackoutLocks and folder in the payload.
+      const { awsData, lockId, newBlackoutLocks, folder } = req.body;
+      console.log("Lock ID:", lockId);
+      if (!awsData || !lockId || !newBlackoutLocks || !folder) {
+        return res.status(400).json({ message: "Missing required fields." });
+      }
+      const { awsAccessKeyId, awsSecretAccessKey, awsRegion, awsBucketName } = awsData;
+      if (!awsAccessKeyId || !awsSecretAccessKey || !awsRegion || !awsBucketName) {
+        return res.status(400).json({ message: "Missing required AWS data." });
+      }
+      
+      // Find the lock document using lockId.
+      const lock = await Lock.findOne({ _id: lockId });
+      if (!lock) {
+        return res.status(404).json({ message: "Lock not found." });
+      }
+      
+      // Extract original video key from the stored originalcontentUrl.
+      const originalUrl = lock.LockJsonObject.originalcontentUrl;
+      const urlParts = originalUrl.split('.amazonaws.com/');
+      if (urlParts.length < 2) {
+        return res.status(500).json({ message: "Invalid original content URL." });
+      }
+      const awsOriginalKey = urlParts[1];
+      
+      // Create an S3 client.
+      const s3Client = new S3Client({
+        region: awsRegion,
+        credentials: {
+          accessKeyId: awsAccessKeyId,
+          secretAccessKey: awsSecretAccessKey
+        }
+      });
+      
+      // Download the original MP4 to a local temporary file.
+      const getCommand = new GetObjectCommand({ Bucket: awsBucketName, Key: awsOriginalKey });
+      const data = await s3Client.send(getCommand);
+      const localMp4Path = path.join(TMP_DIR, `${Date.now()}-original.mp4`);
+      await streamPipeline(data.Body, fs.createWriteStream(localMp4Path));
+      
+      // Process the video into new HLS playlists using the new blackout locks.
+      const { normalPlaylistPath, blackoutPlaylistPath } = createM3U8WithExactSegments(localMp4Path, newBlackoutLocks);
+      
+      // Use the folder provided by the client.
+      // It is assumed that the folder string already contains the full destination path,
+      // e.g., "AES-videos/first-json-show-videos/".
+      const uniqueSubfolder = folder;
+      
+      // Delete existing folder content in S3.
+      const listParams = { Bucket: awsBucketName, Prefix: uniqueSubfolder };
+      const listCommand = new ListObjectsV2Command(listParams);
+      const listData = await s3Client.send(listCommand);
+      if (listData.Contents && listData.Contents.length > 0) {
+        const objectsToDelete = listData.Contents.map(obj => ({ Key: obj.Key }));
+        const deleteParams = { Bucket: awsBucketName, Delete: { Objects: objectsToDelete, Quiet: false } };
+        const deleteCommand = new DeleteObjectsCommand(deleteParams);
+        await s3Client.send(deleteCommand);
+      }
+      
+      // Upload new HLS files to S3.
+      const fileUrlMapping = await uploadHlsFilesToS3(s3Client, awsBucketName, uniqueSubfolder);
+      // Update the playlists to replace local segment filenames with S3 URLs.
+      const updatedNormalPlaylist = updatePlaylistContent(normalPlaylistPath, fileUrlMapping);
+      const updatedBlackoutPlaylist = updatePlaylistContent(blackoutPlaylistPath, fileUrlMapping);
+      
+      // Upload the updated playlists.
+      const finalNormalKey = uniqueSubfolder + 'output.m3u8';
+      const finalBlackoutKey = uniqueSubfolder + 'blackout.m3u8';
+      const normalUrl = await uploadToS3(
+        s3Client,
+        Buffer.from(updatedNormalPlaylist, 'utf8'),
+        awsBucketName,
+        finalNormalKey,
+        'application/vnd.apple.mpegurl'
+      );
+      const blackoutUrl = await uploadToS3(
+        s3Client,
+        Buffer.from(updatedBlackoutPlaylist, 'utf8'),
+        awsBucketName,
+        finalBlackoutKey,
+        'application/vnd.apple.mpegurl'
+      );
+      
+      // Clean up local temporary files.
+      fs.unlinkSync(localMp4Path);
+      const hlsFiles = fs.readdirSync(outputDir);
+      for (const file of hlsFiles) {
+        fs.unlinkSync(path.join(outputDir, file));
+      }
+      
+      // Update the lock document.
+      // Map the new blackout locks to include a new bl_id for each.
+      const updatedBlackoutLocks = newBlackoutLocks.map(b => ({
+        bl_id: uuidv4(),
+        startTime: Number(b.startTime),
+        endTime: Number(b.endTime)
+      }));
+      lock.LockJsonObject.locks["blackout-locks"] = updatedBlackoutLocks;
+      lock.LockJsonObject.lockedcontenturl = blackoutUrl;
+      await lock.save();
+      
+      return res.status(200).json({
+        message: "Lock modified successfully",
+        lock: lock,
+        normalUrl,
+        blackoutUrl
+      });
+    } catch (error) {
+      console.error("Error in /modify-AES:", error);
+      return res.status(500).json({ message: error.message });
+    }
+  });
   
+
+/**
+ * POST /delete-folder-from-json
+ * Expects a JSON body with:
+ * {
+ *   awsData: { awsAccessKeyId, awsSecretAccessKey, awsRegion, awsBucketName, folderPrefix },
+ *   lockId
+ * }
+ * Looks up the lock using lockId to get the contentId, then deletes the folder
+ * (i.e. all objects with key prefix: folderPrefix + contentId + '/') from S3.
+ */
+app.post('/delete-AES', async (req, res) => {
+  try {
+    const { awsData, lockId } = req.body;
+    if (!awsData || !lockId) {
+      return res.status(400).json({ message: "Missing awsData or lockId in request body." });
+    }
+    const { awsAccessKeyId, awsSecretAccessKey, awsRegion, awsBucketName, folderPrefix } = awsData;
+    if (!awsAccessKeyId || !awsSecretAccessKey || !awsRegion || !awsBucketName || !folderPrefix) {
+      return res.status(400).json({ message: "Missing required AWS data." });
+    }
+    
+    // Find the lock document using the provided lockId.
+    const lock = await Lock.findOne({ "LockJsonObject.lockId": lockId });
+    if (!lock) {
+      return res.status(404).json({ message: "Lock not found." });
+    }
+    const contentId = lock.LockJsonObject.contentId;
+    if (!contentId) {
+      return res.status(400).json({ message: "Content ID not found in lock document." });
+    }
+    
+    // Normalize the folderPrefix and build the full folder key.
+    const normalizedPrefix = folderPrefix.endsWith('/') ? folderPrefix : folderPrefix + '/';
+    const folderToDelete = normalizedPrefix + contentId + '/';
+    
+    // Create a new S3 client.
+    const s3Client = new S3Client({
+      region: awsRegion,
+      credentials: {
+        accessKeyId: awsAccessKeyId,
+        secretAccessKey: awsSecretAccessKey
+      }
+    });
+    
+    // List objects in the folder.
+    const listParams = {
+      Bucket: awsBucketName,
+      Prefix: folderToDelete
+    };
+    const listCommand = new ListObjectsV2Command(listParams);
+    const listData = await s3Client.send(listCommand);
+    
+    if (!listData.Contents || listData.Contents.length === 0) {
+      return res.status(404).json({ message: "No objects found in the specified folder." });
+    }
+    
+    // Prepare objects for deletion.
+    const objectsToDelete = listData.Contents.map(obj => ({ Key: obj.Key }));
+    const deleteParams = {
+      Bucket: awsBucketName,
+      Delete: {
+        Objects: objectsToDelete,
+        Quiet: false
+      }
+    };
+    const deleteCommand = new DeleteObjectsCommand(deleteParams);
+    const deleteResult = await s3Client.send(deleteCommand);
+    
+    return res.status(200).json({ message: "Folder deleted successfully", deleteResult });
+  } catch (error) {
+    console.error("Error in /delete-folder-from-json:", error);
+    return res.status(500).json({ message: error.message });
+  }
+});
+
 // Start the Express server on port 3000.
 const PORT = 3000;
 app.listen(PORT, () => {
